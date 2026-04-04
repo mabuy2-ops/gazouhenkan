@@ -408,6 +408,63 @@
       border-top: 1px solid #f0f0f0;
       flex-shrink: 0;
     }
+
+    /* 詳細設定 */
+    .adv-settings {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      flex-shrink: 0;
+    }
+
+    .adv-settings summary {
+      padding: 7px 10px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #666;
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .adv-settings summary::before {
+      content: '▶';
+      font-size: 0.6rem;
+      transition: transform 0.15s;
+    }
+
+    .adv-settings[open] summary::before { transform: rotate(90deg); }
+    .adv-settings summary:hover { color: #8b5cf6; }
+
+    .adv-body {
+      padding: 4px 10px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .adv-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .adv-label {
+      font-size: 0.77rem;
+      color: #444;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .adv-label span { color: #8b5cf6; }
+
+    .adv-hint {
+      font-size: 0.68rem;
+      color: #bbb;
+    }
   </style>
 </head>
 <body>
@@ -488,6 +545,43 @@
             <span>2</span><span>64</span><span>128</span><span>192</span><span>256</span>
           </div>
         </div>
+        <hr class="divider">
+        <details class="adv-settings" id="advSettings">
+          <summary>詳細設定</summary>
+          <div class="adv-body">
+            <div class="adv-row">
+              <label class="adv-label">ノイズ除去 <span id="filterSpeckleVal">4</span></label>
+              <input type="range" min="1" max="16" value="4" id="filterSpeckle"
+                     oninput="onAdvChange('filterSpeckleVal',this.value)">
+              <div class="adv-hint">大きいほど細かいノイズを除去</div>
+            </div>
+            <div class="adv-row">
+              <label class="adv-label">コーナー角度 <span id="cornerThresholdVal">60</span>°</label>
+              <input type="range" min="10" max="180" value="60" id="cornerThreshold"
+                     oninput="onAdvChange('cornerThresholdVal',this.value)">
+              <div class="adv-hint">大きいほど角が少なく滑らか</div>
+            </div>
+            <div class="adv-row">
+              <label class="adv-label">最小パス長 <span id="lengthThresholdVal">4.0</span></label>
+              <input type="range" min="1" max="10" step="0.5" value="4" id="lengthThreshold"
+                     oninput="onAdvChange('lengthThresholdVal',this.value,true)">
+              <div class="adv-hint">大きいほど短いパスを削除</div>
+            </div>
+            <div class="adv-row">
+              <label class="adv-label">スプライス角度 <span id="spliceThresholdVal">45</span>°</label>
+              <input type="range" min="1" max="180" value="45" id="spliceThreshold"
+                     oninput="onAdvChange('spliceThresholdVal',this.value)">
+            </div>
+            <div class="adv-row">
+              <label class="adv-label">パスタイプ</label>
+              <div class="toggle-group" style="margin-top:4px">
+                <button class="toggle-btn active" id="modeSpline" onclick="setPathMode('spline')">スプライン</button>
+                <button class="toggle-btn" id="modePolygon" onclick="setPathMode('polygon')">ポリゴン</button>
+                <button class="toggle-btn" id="modeNone" onclick="setPathMode('none')">なし</button>
+              </div>
+            </div>
+          </div>
+        </details>
         <hr class="divider">
         <div class="status" id="svgStatus"></div>
         <button class="btn btn-outline" id="svgDownloadBtn" onclick="downloadSvg()" style="display:none">
@@ -595,6 +689,8 @@
     // SVG ズーム・パン
     let svgCurrentBlob = null;
     let svgCurrentMode = 'color';
+    let svgPathMode = 'spline';
+    let svgActualColors = 0;
     let svgDebounceTimer = null;
     let svgNaturalWidth = 0;
     let svgNaturalHeight = 0;
@@ -719,6 +815,23 @@
       if (document.getElementById('svgFile').files[0]) previewSvg();
     }
 
+    function onAdvChange(spanId, value, fixed) {
+      document.getElementById(spanId).textContent = fixed ? parseFloat(value).toFixed(1) : value;
+      clearTimeout(svgDebounceTimer);
+      svgDebounceTimer = setTimeout(() => {
+        if (document.getElementById('svgFile').files[0]) previewSvg();
+      }, 600);
+    }
+
+    function setPathMode(mode) {
+      svgPathMode = mode;
+      ['spline', 'polygon', 'none'].forEach(m => {
+        const id = 'mode' + m.charAt(0).toUpperCase() + m.slice(1);
+        document.getElementById(id).classList.toggle('active', m === mode);
+      });
+      if (document.getElementById('svgFile').files[0]) previewSvg();
+    }
+
     function syncColor(value) {
       const v = Math.max(2, Math.min(256, parseInt(value) || 2));
       document.getElementById('colorSlider').value = v;
@@ -767,6 +880,11 @@
       formData.append('file', file);
       formData.append('mode', svgCurrentMode);
       formData.append('colors', document.getElementById('colorSlider').value);
+      formData.append('filter_speckle', document.getElementById('filterSpeckle').value);
+      formData.append('corner_threshold', document.getElementById('cornerThreshold').value);
+      formData.append('length_threshold', document.getElementById('lengthThreshold').value);
+      formData.append('splice_threshold', document.getElementById('spliceThreshold').value);
+      formData.append('path_mode', svgPathMode);
 
       try {
         const res = await fetch('/convert/svg', { method: 'POST', body: formData });
@@ -806,8 +924,16 @@
         } else {
           applyTransform();
         }
+        const fills = new Set(
+          [...innerEl.querySelectorAll('[fill]')]
+            .map(el => el.getAttribute('fill'))
+            .filter(f => f && f !== 'none')
+        );
+        svgActualColors = fills.size;
+
         document.getElementById('svgDownloadBtn').style.display = 'block';
-        setStatus('svgStatus', 'success', '変換完了！');
+        const colorInfo = svgCurrentMode === 'bw' ? '' : ` 実際の色数: ${svgActualColors}色`;
+        setStatus('svgStatus', 'success', `変換完了！${colorInfo}`);
       } catch (e) {
         document.getElementById('svgPreviewEmpty').style.display = '';
         document.getElementById('svgPreviewEmpty').textContent = 'プレビューがここに表示されます';
@@ -820,7 +946,7 @@
       const file = document.getElementById('svgFile').files[0];
       const baseName = file ? file.name.replace(/\.[^.]+$/, '') : 'image';
       const timestamp = new Date().toISOString().replace(/[-T:]/g, '').slice(0, 15);
-      const suffix = svgCurrentMode === 'bw' ? '_bw' : `_${document.getElementById('colorSlider').value}colors`;
+      const suffix = svgCurrentMode === 'bw' ? '_bw' : `_${svgActualColors}colors`;
       download(svgCurrentBlob, `${baseName}${suffix}_${timestamp}.svg`);
     }
 

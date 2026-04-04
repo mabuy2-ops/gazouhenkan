@@ -61,7 +61,14 @@ def convert_svg():
         import vtracer
 
         mode = request.form.get('mode', 'color')
-        colors = max(2, min(256, int(request.form.get('colors', 8))))
+        colors = max(2, min(256, int(request.form.get('colors', 16))))
+        filter_speckle = max(1, min(100, int(request.form.get('filter_speckle', 4))))
+        corner_threshold = max(1, min(180, int(request.form.get('corner_threshold', 60))))
+        length_threshold = max(1.0, min(10.0, float(request.form.get('length_threshold', 4.0))))
+        splice_threshold = max(1, min(180, int(request.form.get('splice_threshold', 45))))
+        path_mode = request.form.get('path_mode', 'spline')
+        if path_mode not in ('spline', 'polygon', 'none'):
+            path_mode = 'spline'
 
         img = Image.open(file.stream).convert('RGB')
         w, h = img.size
@@ -81,7 +88,12 @@ def convert_svg():
             img_bytes,
             img_format='png',
             colormode=colormode,
-            color_precision=color_precision
+            color_precision=color_precision,
+            filter_speckle=filter_speckle,
+            corner_threshold=corner_threshold,
+            length_threshold=length_threshold,
+            splice_threshold=splice_threshold,
+            mode=path_mode,
         )
 
         return Response(svg_str, mimetype='image/svg+xml')
