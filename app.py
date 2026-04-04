@@ -42,6 +42,8 @@ def remove_bg():
     return send_file(output, mimetype='image/png',
                      as_attachment=True, download_name=f'{base_name}_nobg_{timestamp}.png')
 
+MAX_SVG_SIZE = 1024  # 長辺の最大ピクセル数
+
 @app.route('/convert/svg', methods=['POST'])
 def convert_svg():
     file = request.files.get('file')
@@ -51,19 +53,24 @@ def convert_svg():
     mode = request.form.get('mode', 'color')
     colors = int(request.form.get('colors', 8))
 
-    img_bytes = file.stream.read()
-    ext = file.filename.rsplit('.', 1)[-1].lower()
-    img_format = 'jpg' if ext in ('jpg', 'jpeg') else 'png'
+    # 画像をリサイズしてメモリ使用量を抑える
+    img = Image.open(file.stream).convert('RGB')
+    w, h = img.size
+    if max(w, h) > MAX_SVG_SIZE:
+        scale = MAX_SVG_SIZE / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    img_bytes = buf.getvalue()
 
     colormode = 'binary' if mode == 'bw' else 'color'
-    # color_precision: 1-8 bits per channel (2^n colors per channel)
-    # map user's color count (2-64) to precision (1-6)
     import math
     color_precision = 1 if mode == 'bw' else max(1, min(8, round(math.log2(max(2, colors)))))
 
     svg_str = vtracer.convert_raw_image_to_svg(
         img_bytes,
-        img_format=img_format,
+        img_format='png',
         colormode=colormode,
         color_precision=color_precision
     )
