@@ -1,67 +1,214 @@
 from flask import Flask, request, send_file, render_template, Response
-from PIL import Image
+from PIL import Image, ImageFilter
 import io
 import traceback
 from datetime import datetime
+from collections import deque
+import numpy as np
 
 app = Flask(__name__)
 
-MAX_SVG_SIZE = 512  # Render無料枠(512MB RAM)に合わせて縮小
+MAX_SVG_SIZE = 512
 
-# ---- SVG 変換 (Pillow のみ、外部バイナリ不要) ----
+# ──────────────────────────────────────────────
+# 輪郭トレース / 平滑化 ユーティリティ
+# ──────────────────────────────────────────────
 
-def _scanline_rects(pixels, w, h, match_val, color_hex):
-    """指定インデックス/値のピクセルをRLEで<rect>要素に変換"""
-    parts = []
-    for y in range(h):
-        row_start = y * w
-        x = 0
-        while x < w:
-            if pixels[row_start + x] == match_val:
-                sx = x
-                while x < w and pixels[row_start + x] == match_val:
-                    x += 1
-                parts.append(f'<rect x="{sx}" y="{y}" width="{x - sx}" height="1" fill="{color_hex}"/>')
-            else:
-                x += 1
-    return parts
+def _label_components(mask):
+    """BFS で連結成分ラベリング（8近傍）"""
+    h, w = mask.shape
+    labels = np.where(mask, -1, 0).astype(np.int32)
+    current_label = 0
+    component_sizes = []
+
+    for seed_r, seed_c in zip(*np.where(labels == -1)):
+        seed_r, seed_c = int(seed_r), int(seed_c)
+        if labels[seed_r, seed_c] != -1:
+            continue
+        current_label += 1
+        size = 0
+        queue = deque([(seed_r, seed_c)])
+        labels[seed_r, seed_c] = current_label
+        while queue:
+            r, c = queue.popleft()
+            size += 1
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and labels[nr, nc] == -1:
+                        labels[nr, nc] = current_label
+                        queue.append((nr, nc))
+        component_sizes.append((current_label, size))
+
+    return labels, component_sizes
+
+
+def _trace_boundary(mask):
+    """Moore 境界トレースアルゴリズム"""
+    h, w = mask.shape
+    filled = np.where(mask)
+    if len(filled[0]) == 0:
+        return []
+
+    min_row = int(filled[0].min())
+    start_c = int(filled[1][filled[0] == min_row].min())
+    start_r = min_row
+
+    # 時計回り 8 方向: 0=右,1=右下,2=下,3=左下,4=左,5=左上,6=上,7=右上
+    DIRS = [(0,1),(1,1),(1,0),(1,-1),(0,-1),(-1,-1),(-1,0),(-1,1)]
+
+    contour = [(start_c, start_r)]
+    r, c = start_r, start_c
+    back = 4  # 左から来たと仮定
+
+    for _ in range(w * h * 2 + 10):
+        found = False
+        for i in range(1, 9):
+            d = (back + i) % 8
+            nr = r + DIRS[d][0]
+            nc = c + DIRS[d][1]
+            if 0 <= nr < h and 0 <= nc < w and mask[nr, nc]:
+                back = (d + 4) % 8
+                r, c = nr, nc
+                if r == start_r and c == start_c and len(contour) > 2:
+                    return contour
+                contour.append((c, r))
+                found = True
+                break
+        if not found:
+            break
+
+    return contour
+
+
+def _rdp(points, epsilon=2.0):
+    """Ramer-Douglas-Peucker 折れ線簡略化"""
+    if len(points) <= 2:
+        return list(points)
+
+    pts = np.array(points, dtype=float)
+
+    def _rdp_rec(pts):
+        if len(pts) <= 2:
+            return [tuple(pts[0]), tuple(pts[-1])]
+        start, end = pts[0], pts[-1]
+        line = end - start
+        norm = np.linalg.norm(line)
+        if norm < 1e-10:
+            dists = np.linalg.norm(pts[1:-1] - start, axis=1)
+        else:
+            dists = np.abs(
+                (pts[1:-1, 0] - start[0]) * line[1] -
+                (pts[1:-1, 1] - start[1]) * line[0]
+            ) / norm
+        idx = int(np.argmax(dists))
+        if dists[idx] > epsilon:
+            left = _rdp_rec(pts[:idx + 2])
+            right = _rdp_rec(pts[idx + 1:])
+            return left[:-1] + right
+        return [tuple(pts[0]), tuple(pts[-1])]
+
+    return _rdp_rec(pts)
+
+
+def _chaikin(points, iterations=3):
+    """Chaikin のコーナーカット（閉じた多角形を平滑化）"""
+    pts = [(float(p[0]), float(p[1])) for p in points]
+    if len(pts) < 3:
+        return pts
+    if pts[0] != pts[-1]:
+        pts.append(pts[0])
+
+    for _ in range(iterations):
+        new_pts = []
+        n = len(pts) - 1
+        for i in range(n):
+            p0, p1 = pts[i], pts[i + 1]
+            q = (0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1])
+            r = (0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1])
+            new_pts.extend([q, r])
+        new_pts.append(new_pts[0])
+        pts = new_pts
+
+    return pts
+
+
+def _component_to_path(component_mask, epsilon=1.5):
+    """1 成分マスク → SVG path d 属性文字列"""
+    contour = _trace_boundary(component_mask)
+    if len(contour) < 3:
+        return None
+    simplified = _rdp(contour, epsilon=epsilon)
+    smooth = _chaikin(simplified, iterations=3)
+    pts = smooth[:-1]  # 閉じる点を除去
+    if len(pts) < 3:
+        return None
+    d = f"M {pts[0][0]:.2f} {pts[0][1]:.2f}"
+    for p in pts[1:]:
+        d += f" L {p[0]:.2f} {p[1]:.2f}"
+    d += " Z"
+    return d
+
 
 def _convert_to_svg(img, colormode='color', num_colors=8):
-    """PIL Image を SVG 文字列に変換（Pillow のみ）"""
     w, h = img.size
+    # ノイズ低減のため軽くブラー
+    img = img.filter(ImageFilter.GaussianBlur(radius=0.8))
+
+    svg_parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+    ]
 
     if colormode == 'binary':
-        gray = img.convert('L').point(lambda p: 0 if p < 128 else 255)
-        pixels = list(gray.getdata())
-        rects = _scanline_rects(pixels, w, h, 0, 'black')
-        body = '\n'.join(rects)
-        return (
-            f'<svg xmlns="http://www.w3.org/2000/svg" '
-            f'width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
-            f'<rect width="{w}" height="{h}" fill="white"/>'
-            f'{body}'
-            f'</svg>'
-        )
+        svg_parts.append(f'<rect width="{w}" height="{h}" fill="white"/>')
+        binary = np.array(img.convert('L')) < 128
+        labels, components = _label_components(binary)
+        for label, size in sorted(components, key=lambda x: -x[1]):
+            if size < 5:
+                continue
+            d = _component_to_path(labels == label)
+            if d:
+                svg_parts.append(f'<path d="{d}" fill="black"/>')
+
     else:
         quantized = img.quantize(colors=num_colors, method=Image.Quantize.MEDIANCUT)
         palette = quantized.getpalette()
-        pixels = list(quantized.getdata())
-        used_indices = sorted(set(pixels))
+        q_array = np.array(quantized, dtype=np.int32)
+        used_indices = sorted(set(q_array.flatten().tolist()))
 
-        parts = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" '
-            f'width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
-        ]
         for idx in used_indices:
-            r = palette[idx * 3]
-            g = palette[idx * 3 + 1]
-            b = palette[idx * 3 + 2]
-            color_hex = f'#{r:02x}{g:02x}{b:02x}'
-            parts.extend(_scanline_rects(pixels, w, h, idx, color_hex))
-        parts.append('</svg>')
-        return '\n'.join(parts)
+            r_val = palette[idx * 3]
+            g_val = palette[idx * 3 + 1]
+            b_val = palette[idx * 3 + 2]
+            color_hex = f'#{r_val:02x}{g_val:02x}{b_val:02x}'
 
-# ---- routes ----
+            mask = q_array == idx
+            labels, components = _label_components(mask)
+
+            d_list = []
+            for label, size in sorted(components, key=lambda x: -x[1]):
+                if size < 8:
+                    continue
+                d = _component_to_path(labels == label)
+                if d:
+                    d_list.append(d)
+
+            if d_list:
+                combined = ' '.join(d_list)
+                svg_parts.append(
+                    f'<path d="{combined}" fill="{color_hex}" fill-rule="evenodd"/>'
+                )
+
+    svg_parts.append('</svg>')
+    return '\n'.join(svg_parts)
+
+
+# ──────────────────────────────────────────────
+# Routes
+# ──────────────────────────────────────────────
 
 @app.route('/')
 def index():
@@ -117,14 +264,12 @@ def convert_svg():
 
         img = Image.open(file.stream).convert('RGB')
         w, h = img.size
-
         if max(w, h) > MAX_SVG_SIZE:
             scale = MAX_SVG_SIZE / max(w, h)
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
         colormode = 'binary' if mode == 'bw' else 'color'
         svg_str = _convert_to_svg(img, colormode=colormode, num_colors=colors)
-
         return Response(svg_str, mimetype='image/svg+xml')
 
     except Exception:

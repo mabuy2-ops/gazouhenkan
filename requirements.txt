@@ -1,5 +1,6 @@
 flask
 pillow
+numpy
 rembg
 onnxruntime
 gunicorn
