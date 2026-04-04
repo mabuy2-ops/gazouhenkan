@@ -3,3 +3,4 @@ pillow
 rembg
 onnxruntime
 vtracer
+gunicorn
