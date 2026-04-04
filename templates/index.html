@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>画像変換ツール</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', 'Hiragino Sans', sans-serif;
+      background: #f0f2f5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 12px 16px;
+      overflow: hidden;
+    }
+
+    h1 {
+      font-size: 1.3rem;
+      color: #1a1a2e;
+      margin-bottom: 10px;
+      letter-spacing: 0.05em;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    /* タブバー */
+    .tab-bar {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+      margin-bottom: 10px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 10px 8px;
+      border: 2px solid #d1d5db;
+      border-radius: 10px;
+      background: #fff;
+      color: #666;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .tab-btn:hover { border-color: #8b5cf6; color: #8b5cf6; background: #faf5ff; }
+
+    .tab-btn.active {
+      border-color: #8b5cf6;
+      background: #8b5cf6;
+      color: #fff;
+    }
+
+    /* タブパネル */
+    .tab-panel {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      background: #fff;
+      border-radius: 14px;
+      padding: 20px 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: hidden;
+    }
+
+    .tab-panel.active {
+      display: flex;
+    }
+
+    #tab-svg {
+      overflow-y: auto;
+    }
+
+    .card-icon {
+      font-size: 2rem;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .panel-title {
+      font-size: 1.1rem;
+      color: #1a1a2e;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .panel-desc {
+      font-size: 0.82rem;
+      color: #666;
+      text-align: center;
+      line-height: 1.5;
+      flex-shrink: 0;
+    }
+
+    .file-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 2px dashed #c0c8d8;
+      border-radius: 10px;
+      padding: 12px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      color: #555;
+      transition: border-color 0.2s, background 0.2s;
+      flex-shrink: 0;
+    }
+
+    .file-label:hover { border-color: #6c8ebf; background: #f5f8ff; }
+    .file-label input[type="file"] { display: none; }
+
+    .file-name {
+      font-size: 0.8rem;
+      color: #888;
+      text-align: center;
+      word-break: break-all;
+      flex-shrink: 0;
+    }
+
+    /* 入力画像プレビュー（WebP・背景除去用） */
+    .input-preview {
+      display: none;
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      overflow: hidden;
+      background: repeating-conic-gradient(#f0f0f0 0% 25%, #fff 0% 50%) 0 0 / 12px 12px;
+      flex-shrink: 0;
+    }
+
+    .input-preview img {
+      max-width: 100%;
+      max-height: 200px;
+      display: block;
+      margin: 0 auto;
+    }
+
+    /* ベクター変換 元画像プレビュー（連動ズーム対応） */
+    #svgInputPreview {
+      display: none;
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      overflow: hidden;
+      background: repeating-conic-gradient(#f0f0f0 0% 25%, #fff 0% 50%) 0 0 / 12px 12px;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    #svgInputInner {
+      position: absolute;
+      top: 0; left: 0;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    #svgInputInner img { display: block; }
+
+    .btn {
+      padding: 11px;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-blue   { background: #3b82f6; }
+    .btn-blue:hover:not(:disabled)   { background: #2563eb; }
+
+    .btn-green  { background: #22c55e; }
+    .btn-green:hover:not(:disabled)  { background: #16a34a; }
+
+    .btn-purple { background: #8b5cf6; }
+    .btn-purple:hover:not(:disabled) { background: #7c3aed; }
+
+    .btn-outline {
+      background: transparent;
+      border: 2px solid #8b5cf6;
+      color: #8b5cf6;
+      padding: 9px;
+    }
+    .btn-outline:hover:not(:disabled) { background: #f5f0ff; }
+
+    .status {
+      font-size: 0.85rem;
+      text-align: center;
+      min-height: 1.2em;
+      flex-shrink: 0;
+    }
+
+    .status.loading { color: #888; }
+    .status.success { color: #16a34a; }
+    .status.error   { color: #dc2626; }
+
+    .spinner {
+      display: inline-block;
+      width: 12px; height: 12px;
+      border: 2px solid #ccc;
+      border-top-color: #555;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* カラー/白黒トグル */
+    .toggle-group {
+      display: flex;
+      border: 2px solid #8b5cf6;
+      border-radius: 10px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .toggle-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      background: transparent;
+      color: #8b5cf6;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .toggle-btn.active { background: #8b5cf6; color: #fff; }
+
+    /* カラーカウンター */
+    .color-counter {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .counter-label { font-size: 0.85rem; color: #444; white-space: nowrap; }
+
+    .counter-input {
+      flex: 1;
+      border: 2px solid #d1d5db;
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #8b5cf6;
+      text-align: center;
+      width: 0;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .counter-input:focus { border-color: #8b5cf6; }
+
+    .counter-btn {
+      width: 30px; height: 30px;
+      border: 2px solid #8b5cf6;
+      border-radius: 8px;
+      background: transparent;
+      color: #8b5cf6;
+      font-size: 1.1rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s, color 0.15s;
+      padding: 0;
+    }
+
+    .counter-btn:hover { background: #8b5cf6; color: #fff; }
+    .counter-btn:active { transform: scale(0.92); }
+
+    /* スライダー */
+    .slider-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    input[type="range"] { width: 100%; accent-color: #8b5cf6; cursor: pointer; }
+
+    .slider-ticks {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: #aaa;
+    }
+
+    /* SVGプレビュー */
+    .svg-preview {
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      min-height: 200px;
+      position: relative;
+      background: repeating-conic-gradient(#f0f0f0 0% 25%, #fff 0% 50%) 0 0 / 12px 12px;
+      overflow: hidden;
+      flex-shrink: 0;
+      cursor: grab;
+      user-select: none;
+    }
+
+    .svg-preview.dragging { cursor: grabbing; }
+
+    .svg-preview-inner {
+      position: absolute;
+      top: 0; left: 0;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    .svg-preview-inner svg { display: block; }
+
+    .svg-preview-empty {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: #bbb;
+      font-size: 0.85rem;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    .svg-zoom-hint {
+      position: absolute;
+      bottom: 6px; right: 8px;
+      font-size: 0.7rem;
+      color: #aaa;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>画像変換ツール</h1>
+
+  <!-- タブバー -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('webp')">🖼️ WebP → JPEG</button>
+    <button class="tab-btn" onclick="switchTab('bg')">✂️ 背景を透明化</button>
+    <button class="tab-btn" onclick="switchTab('svg')">🎨 ベクター化</button>
+  </div>
+
+  <!-- WebP → JPEG -->
+  <div class="tab-panel active" id="tab-webp">
+    <div class="card-icon">🖼️</div>
+    <div class="panel-title">WebP → JPEG 変換</div>
+    <p class="panel-desc">WebP形式の画像をJPEG形式に変換します。</p>
+
+    <label class="file-label">
+      <input type="file" id="webpFile" accept=".webp,image/webp">
+      ファイルを選択
+    </label>
+    <div class="file-name" id="webpFileName">未選択</div>
+    <div class="input-preview" id="webpPreview"><img id="webpPreviewImg"></div>
+
+    <button class="btn btn-blue" id="webpBtn" onclick="convertWebp()" disabled>
+      変換してダウンロード
+    </button>
+    <div class="status" id="webpStatus"></div>
+  </div>
+
+  <!-- 背景透明化 -->
+  <div class="tab-panel" id="tab-bg">
+    <div class="card-icon">✂️</div>
+    <div class="panel-title">背景を透明化</div>
+    <p class="panel-desc">画像の背景を自動で除去し、PNG形式で保存します。</p>
+
+    <label class="file-label">
+      <input type="file" id="bgFile" accept="image/*">
+      ファイルを選択
+    </label>
+    <div class="file-name" id="bgFileName">未選択</div>
+    <div class="input-preview" id="bgPreview"><img id="bgPreviewImg"></div>
+
+    <button class="btn btn-green" id="bgBtn" onclick="removeBg()" disabled>
+      背景を除去してダウンロード
+    </button>
+    <div class="status" id="bgStatus"></div>
+  </div>
+
+  <!-- ベクター化 (SVG変換) -->
+  <div class="tab-panel" id="tab-svg">
+    <div class="card-icon">🎨</div>
+    <div class="panel-title">ベクター化 (SVG変換)</div>
+    <p class="panel-desc">JPG・PNG画像をSVGベクター形式に変換します。</p>
+
+    <label class="file-label">
+      <input type="file" id="svgFile" accept=".jpg,.jpeg,.png,image/jpeg,image/png">
+      ファイルを選択
+    </label>
+    <div class="file-name" id="svgFileName">未選択</div>
+    <div id="svgInputPreview">
+      <div id="svgInputInner"><img id="svgInputPreviewImg"></div>
+    </div>
+
+    <div class="toggle-group">
+      <button class="toggle-btn active" id="colorModeBtn" onclick="setSvgMode('color')">カラー</button>
+      <button class="toggle-btn" id="bwModeBtn" onclick="setSvgMode('bw')">白黒</button>
+    </div>
+
+    <div class="slider-group" id="sliderGroup">
+      <div class="color-counter">
+        <span class="counter-label">色数</span>
+        <button class="counter-btn" onclick="stepColor(-1)">−</button>
+        <input class="counter-input" type="number" id="colorSlider" min="2" max="256" value="16"
+               oninput="onColorInput(this.value)">
+        <button class="counter-btn" onclick="stepColor(1)">＋</button>
+        <span class="counter-label">色</span>
+      </div>
+      <input type="range" id="colorRange" min="2" max="256" value="16"
+             oninput="onRangeChange(this.value)">
+      <div class="slider-ticks">
+        <span>2</span><span>64</span><span>128</span><span>192</span><span>256</span>
+      </div>
+    </div>
+
+    <div class="status" id="svgStatus"></div>
+
+    <div class="svg-preview" id="svgPreview">
+      <div class="svg-preview-inner" id="svgPreviewInner"></div>
+      <span class="svg-preview-empty" id="svgPreviewEmpty">プレビューがここに表示されます</span>
+      <span class="svg-zoom-hint" id="svgZoomHint" style="display:none">ホイール: 拡大縮小 / ドラッグ: 移動 / ダブルクリック: リセット</span>
+    </div>
+
+    <button class="btn btn-outline" id="svgDownloadBtn" onclick="downloadSvg()" style="display:none">
+      SVGをダウンロード
+    </button>
+  </div>
+
+  <script>
+    // タブ切り替え
+    function switchTab(name) {
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('tab-' + name).classList.add('active');
+      document.querySelectorAll('.tab-btn')[['webp','bg','svg'].indexOf(name)].classList.add('active');
+    }
+
+    let svgCurrentBlob = null;
+    let svgCurrentMode = 'color';
+    let svgDebounceTimer = null;
+    let svgNaturalWidth = 0;
+    let svgNaturalHeight = 0;
+
+    // ズーム・パン状態
+    let zoomScale = 1;
+    let panX = 0;
+    let panY = 0;
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragStartPanX = 0;
+    let dragStartPanY = 0;
+
+    const previewEl      = document.getElementById('svgPreview');
+    const innerEl        = document.getElementById('svgPreviewInner');
+    const inputPreviewEl = document.getElementById('svgInputPreview');
+    const inputInnerEl   = document.getElementById('svgInputInner');
+    const inputImgEl     = document.getElementById('svgInputPreviewImg');
+
+    function applyTransform() {
+      const t = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+      innerEl.style.transform = t;
+      inputInnerEl.style.transform = t;
+    }
+
+    function resetZoom() {
+      if (!svgNaturalWidth) return;
+      const containerW = previewEl.clientWidth;
+      zoomScale = Math.min(1, containerW / svgNaturalWidth);
+      panX = 0; panY = 0;
+      const h = Math.round(svgNaturalHeight * zoomScale) + 'px';
+      previewEl.style.height = h;
+      inputPreviewEl.style.height = h;
+      applyTransform();
+    }
+
+    previewEl.addEventListener('wheel', (e) => {
+      if (!svgNaturalWidth) return;
+      e.preventDefault();
+      const rect = previewEl.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const delta = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const newScale = Math.max(0.1, Math.min(20, zoomScale * delta));
+      panX = mx - (mx - panX) * (newScale / zoomScale);
+      panY = my - (my - panY) * (newScale / zoomScale);
+      zoomScale = newScale;
+      applyTransform();
+    }, { passive: false });
+
+    previewEl.addEventListener('mousedown', (e) => {
+      if (!svgNaturalWidth) return;
+      isDragging = true;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      dragStartPanX = panX;   dragStartPanY = panY;
+      previewEl.classList.add('dragging');
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      panX = dragStartPanX + (e.clientX - dragStartX);
+      panY = dragStartPanY + (e.clientY - dragStartY);
+      applyTransform();
+    });
+
+    window.addEventListener('mouseup', () => {
+      isDragging = false;
+      previewEl.classList.remove('dragging');
+    });
+
+    previewEl.addEventListener('dblclick', resetZoom);
+
+    // ファイル選択
+    document.getElementById('webpFile').addEventListener('change', function() {
+      document.getElementById('webpFileName').textContent = this.files[0]?.name || '未選択';
+      document.getElementById('webpBtn').disabled = !this.files[0];
+      document.getElementById('webpStatus').textContent = '';
+      showInputPreview(this.files[0], 'webpPreview', 'webpPreviewImg');
+    });
+
+    document.getElementById('bgFile').addEventListener('change', function() {
+      document.getElementById('bgFileName').textContent = this.files[0]?.name || '未選択';
+      document.getElementById('bgBtn').disabled = !this.files[0];
+      document.getElementById('bgStatus').textContent = '';
+      showInputPreview(this.files[0], 'bgPreview', 'bgPreviewImg');
+    });
+
+    document.getElementById('svgFile').addEventListener('change', function() {
+      document.getElementById('svgFileName').textContent = this.files[0]?.name || '未選択';
+      document.getElementById('svgStatus').textContent = '';
+      innerEl.innerHTML = '';
+      document.getElementById('svgPreviewEmpty').style.display = '';
+      document.getElementById('svgZoomHint').style.display = 'none';
+      previewEl.style.height = '';
+      inputPreviewEl.style.height = '';
+      inputPreviewEl.style.display = 'none';
+      inputImgEl.style.width = '';
+      inputImgEl.style.height = '';
+      document.getElementById('svgDownloadBtn').style.display = 'none';
+      svgCurrentBlob = null;
+      svgNaturalWidth = 0;
+      zoomScale = 1; panX = 0; panY = 0;
+      applyTransform();
+      if (this.files[0]) {
+        const url = URL.createObjectURL(this.files[0]);
+        inputImgEl.src = url;
+        previewSvg();
+      }
+    });
+
+    function showInputPreview(file, previewId, imgId) {
+      const el = document.getElementById(previewId);
+      const img = document.getElementById(imgId);
+      if (!file) { el.style.display = 'none'; img.src = ''; return; }
+      const url = URL.createObjectURL(file);
+      img.onload = () => URL.revokeObjectURL(url);
+      img.src = url;
+      el.style.display = 'block';
+    }
+
+    function setSvgMode(mode) {
+      svgCurrentMode = mode;
+      document.getElementById('colorModeBtn').classList.toggle('active', mode === 'color');
+      document.getElementById('bwModeBtn').classList.toggle('active', mode === 'bw');
+      document.getElementById('sliderGroup').style.display = mode === 'bw' ? 'none' : 'flex';
+      if (document.getElementById('svgFile').files[0]) previewSvg();
+    }
+
+    function syncColor(value) {
+      const v = Math.max(2, Math.min(256, parseInt(value) || 2));
+      document.getElementById('colorSlider').value = v;
+      document.getElementById('colorRange').value = v;
+      return v;
+    }
+
+    function onColorInput(value) {
+      syncColor(value);
+      clearTimeout(svgDebounceTimer);
+      svgDebounceTimer = setTimeout(() => {
+        if (document.getElementById('svgFile').files[0]) previewSvg();
+      }, 800);
+    }
+
+    function onRangeChange(value) {
+      syncColor(value);
+      clearTimeout(svgDebounceTimer);
+      svgDebounceTimer = setTimeout(() => {
+        if (document.getElementById('svgFile').files[0]) previewSvg();
+      }, 600);
+    }
+
+    function stepColor(delta) {
+      const cur = parseInt(document.getElementById('colorSlider').value) || 16;
+      syncColor(cur + delta);
+      clearTimeout(svgDebounceTimer);
+      svgDebounceTimer = setTimeout(() => {
+        if (document.getElementById('svgFile').files[0]) previewSvg();
+      }, 400);
+    }
+
+    async function previewSvg() {
+      const file = document.getElementById('svgFile').files[0];
+      if (!file) return;
+
+      setStatus('svgStatus', 'loading', '変換中...');
+      document.getElementById('svgDownloadBtn').style.display = 'none';
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('mode', svgCurrentMode);
+      formData.append('colors', document.getElementById('colorSlider').value);
+
+      try {
+        const res = await fetch('/convert/svg', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error(await res.text());
+
+        const svgText = await res.text();
+        svgCurrentBlob = new Blob([svgText], { type: 'image/svg+xml' });
+
+        innerEl.innerHTML = svgText;
+        const svgEl = innerEl.querySelector('svg');
+
+        const vb = svgEl.getAttribute('viewBox');
+        if (vb) {
+          const parts = vb.split(/[\s,]+/);
+          svgNaturalWidth  = parseFloat(parts[2]);
+          svgNaturalHeight = parseFloat(parts[3]);
+        } else {
+          svgNaturalWidth  = parseFloat(svgEl.getAttribute('width'))  || 800;
+          svgNaturalHeight = parseFloat(svgEl.getAttribute('height')) || 600;
+        }
+        svgEl.setAttribute('width',  svgNaturalWidth);
+        svgEl.setAttribute('height', svgNaturalHeight);
+        svgEl.style.width  = svgNaturalWidth + 'px';
+        svgEl.style.height = svgNaturalHeight + 'px';
+
+        document.getElementById('svgPreviewEmpty').style.display = 'none';
+        document.getElementById('svgZoomHint').style.display = 'block';
+
+        inputImgEl.style.width  = svgNaturalWidth + 'px';
+        inputImgEl.style.height = svgNaturalHeight + 'px';
+        inputPreviewEl.style.display = 'block';
+
+        resetZoom();
+
+        document.getElementById('svgDownloadBtn').style.display = 'block';
+        setStatus('svgStatus', 'success', '変換完了！');
+      } catch (e) {
+        setStatus('svgStatus', 'error', 'エラー: ' + e.message);
+      }
+    }
+
+    function downloadSvg() {
+      if (!svgCurrentBlob) return;
+      const file = document.getElementById('svgFile').files[0];
+      const baseName = file ? file.name.replace(/\.[^.]+$/, '') : 'image';
+      const timestamp = new Date().toISOString().replace(/[-T:]/g, '').slice(0, 15);
+      const suffix = svgCurrentMode === 'bw' ? '_bw' : `_${document.getElementById('colorSlider').value}colors`;
+      download(svgCurrentBlob, `${baseName}${suffix}_${timestamp}.svg`);
+    }
+
+    async function convertWebp() {
+      const file = document.getElementById('webpFile').files[0];
+      if (!file) return;
+      setStatus('webpStatus', 'loading', '変換中...');
+      document.getElementById('webpBtn').disabled = true;
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const res = await fetch('/convert/webp', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        download(blob, file.name.replace(/\.[^.]+$/, '') + '.jpg');
+        setStatus('webpStatus', 'success', '変換完了！');
+      } catch (e) {
+        setStatus('webpStatus', 'error', 'エラー: ' + e.message);
+      } finally {
+        document.getElementById('webpBtn').disabled = false;
+      }
+    }
+
+    async function removeBg() {
+      const file = document.getElementById('bgFile').files[0];
+      if (!file) return;
+      setStatus('bgStatus', 'loading', '処理中... (初回は時間がかかります)');
+      document.getElementById('bgBtn').disabled = true;
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const res = await fetch('/convert/bg', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        download(blob, file.name.replace(/\.[^.]+$/, '') + '_nobg.png');
+        setStatus('bgStatus', 'success', '処理完了！');
+      } catch (e) {
+        setStatus('bgStatus', 'error', 'エラー: ' + e.message);
+      } finally {
+        document.getElementById('bgBtn').disabled = false;
+      }
+    }
+
+    function download(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function setStatus(id, type, msg) {
+      const el = document.getElementById(id);
+      el.className = 'status ' + type;
+      el.innerHTML = type === 'loading' ? `<span class="spinner"></span>${msg}` : msg;
+    }
+  </script>
+
+</body>
+</html>
