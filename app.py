@@ -1,8 +1,6 @@
 from flask import Flask, request, send_file, render_template, Response
 from PIL import Image
 import io
-import re
-import subprocess
 import traceback
 from datetime import datetime
 
@@ -10,52 +8,38 @@ app = Flask(__name__)
 
 MAX_SVG_SIZE = 512  # Render無料枠(512MB RAM)に合わせて縮小
 
-# ---- potrace helpers ----
+# ---- SVG 変換 (Pillow のみ、外部バイナリ不要) ----
 
-def _img_to_pbm(img_gray):
-    """PIL グレースケール画像を PBM(P4) バイト列に変換"""
-    w, h = img_gray.size
-    pixels = list(img_gray.getdata())
-    header = f"P4\n{w} {h}\n".encode()
-    row_bytes = (w + 7) // 8
-    data = bytearray(h * row_bytes)
+def _scanline_rects(pixels, w, h, match_val, color_hex):
+    """指定インデックス/値のピクセルをRLEで<rect>要素に変換"""
+    parts = []
     for y in range(h):
-        for x in range(w):
-            if pixels[y * w + x] < 128:
-                data[y * row_bytes + x // 8] |= (1 << (7 - x % 8))
-    return header + bytes(data)
-
-def _run_potrace(pbm_data, fill_color):
-    """potrace を実行して SVG path 要素文字列を返す"""
-    result = subprocess.run(
-        ['potrace', '-s', '-o', '-', '-'],
-        input=pbm_data,
-        capture_output=True,
-        timeout=30
-    )
-    svg = result.stdout.decode('utf-8', errors='replace')
-    paths = re.findall(r'<path\b[^>]*\bd="([^"]+)"', svg)
-    if not paths:
-        return ''
-    if isinstance(fill_color, tuple):
-        color_hex = '#{:02x}{:02x}{:02x}'.format(*fill_color)
-    else:
-        color_hex = fill_color
-    return '\n'.join(f'<path d="{d}" fill="{color_hex}"/>' for d in paths)
+        row_start = y * w
+        x = 0
+        while x < w:
+            if pixels[row_start + x] == match_val:
+                sx = x
+                while x < w and pixels[row_start + x] == match_val:
+                    x += 1
+                parts.append(f'<rect x="{sx}" y="{y}" width="{x - sx}" height="1" fill="{color_hex}"/>')
+            else:
+                x += 1
+    return parts
 
 def _convert_to_svg(img, colormode='color', num_colors=8):
-    """PIL Image を SVG 文字列に変換"""
+    """PIL Image を SVG 文字列に変換（Pillow のみ）"""
     w, h = img.size
 
     if colormode == 'binary':
-        gray = img.convert('L')
-        pbm = _img_to_pbm(gray)
-        paths_svg = _run_potrace(pbm, 'black')
+        gray = img.convert('L').point(lambda p: 0 if p < 128 else 255)
+        pixels = list(gray.getdata())
+        rects = _scanline_rects(pixels, w, h, 0, 'black')
+        body = '\n'.join(rects)
         return (
-            f'<?xml version="1.0"?>'
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+            f'<svg xmlns="http://www.w3.org/2000/svg" '
+            f'width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
             f'<rect width="{w}" height="{h}" fill="white"/>'
-            f'{paths_svg}'
+            f'{body}'
             f'</svg>'
         )
     else:
@@ -64,20 +48,18 @@ def _convert_to_svg(img, colormode='color', num_colors=8):
         pixels = list(quantized.getdata())
         used_indices = sorted(set(pixels))
 
-        svg_parts = [
-            f'<?xml version="1.0"?>',
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+        parts = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" '
+            f'width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
         ]
         for idx in used_indices:
-            r, g, b = palette[idx * 3], palette[idx * 3 + 1], palette[idx * 3 + 2]
-            mask = Image.new('L', (w, h), 255)
-            mask.putdata([0 if p == idx else 255 for p in pixels])
-            pbm = _img_to_pbm(mask)
-            paths = _run_potrace(pbm, (r, g, b))
-            if paths:
-                svg_parts.append(paths)
-        svg_parts.append('</svg>')
-        return '\n'.join(svg_parts)
+            r = palette[idx * 3]
+            g = palette[idx * 3 + 1]
+            b = palette[idx * 3 + 2]
+            color_hex = f'#{r:02x}{g:02x}{b:02x}'
+            parts.extend(_scanline_rects(pixels, w, h, idx, color_hex))
+        parts.append('</svg>')
+        return '\n'.join(parts)
 
 # ---- routes ----
 
@@ -88,27 +70,6 @@ def index():
 @app.route('/healthz')
 def healthz():
     return 'OK flask=running'
-
-@app.route('/healthz/potrace')
-def healthz_potrace():
-    """診断用: potrace動作確認"""
-    try:
-        img = Image.new('L', (8, 8), 128)
-        pbm = _img_to_pbm(img)
-        result = subprocess.run(['potrace', '-s', '-o', '-', '-'],
-                                input=pbm, capture_output=True, timeout=10)
-        return f'OK potrace returncode={result.returncode} svg_len={len(result.stdout)}'
-    except Exception:
-        return f'ERROR: {traceback.format_exc()}', 500
-
-@app.route('/healthz/rembg')
-def healthz_rembg():
-    """診断用: rembg動作確認"""
-    try:
-        from rembg import remove
-        return 'OK rembg=installed'
-    except Exception:
-        return f'ERROR: {traceback.format_exc()}', 500
 
 @app.route('/convert/webp', methods=['POST'])
 def convert_webp():
