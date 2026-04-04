@@ -1,6 +1,6 @@
 flask
 pillow
-numpy
 rembg
 onnxruntime
+vtracer
 gunicorn
