@@ -1,11 +1,9 @@
 from flask import Flask, request, send_file, render_template, Response
 from PIL import Image
-from rembg import remove
 import io
 import math
 import traceback
 from datetime import datetime
-import vtracer
 
 app = Flask(__name__)
 
@@ -17,14 +15,28 @@ def index():
 
 @app.route('/healthz')
 def healthz():
+    """診断用: 起動確認（重いライブラリは読み込まない）"""
+    return 'OK flask=running'
+
+@app.route('/healthz/vtracer')
+def healthz_vtracer():
     """診断用: vtracer動作確認"""
     try:
-        # 1x1の白画像でvtracerをテスト
+        import vtracer
         img = Image.new('RGB', (4, 4), color=(255, 255, 255))
         buf = io.BytesIO()
         img.save(buf, format='PNG')
         svg = vtracer.convert_raw_image_to_svg(buf.getvalue(), img_format='png', colormode='color')
         return f'OK vtracer={vtracer.__version__ if hasattr(vtracer, "__version__") else "installed"} svg_len={len(svg)}'
+    except Exception as e:
+        return f'ERROR: {traceback.format_exc()}', 500
+
+@app.route('/healthz/rembg')
+def healthz_rembg():
+    """診断用: rembg動作確認"""
+    try:
+        from rembg import remove
+        return 'OK rembg=installed'
     except Exception as e:
         return f'ERROR: {traceback.format_exc()}', 500
 
@@ -50,14 +62,18 @@ def remove_bg():
     if not file:
         return '画像ファイルが選択されていません', 400
 
-    input_data = file.stream.read()
-    output_data = remove(input_data)
+    try:
+        from rembg import remove
+        input_data = file.stream.read()
+        output_data = remove(input_data)
 
-    output = io.BytesIO(output_data)
-    base_name = file.filename.rsplit('.', 1)[0]
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    return send_file(output, mimetype='image/png',
-                     as_attachment=True, download_name=f'{base_name}_nobg_{timestamp}.png')
+        output = io.BytesIO(output_data)
+        base_name = file.filename.rsplit('.', 1)[0]
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        return send_file(output, mimetype='image/png',
+                         as_attachment=True, download_name=f'{base_name}_nobg_{timestamp}.png')
+    except Exception as e:
+        return f'背景除去エラー: {traceback.format_exc()}', 500
 
 @app.route('/convert/svg', methods=['POST'])
 def convert_svg():
@@ -66,6 +82,8 @@ def convert_svg():
         return '画像ファイルが選択されていません', 400
 
     try:
+        import vtracer
+
         mode = request.form.get('mode', 'color')
         colors = int(request.form.get('colors', 8))
 
