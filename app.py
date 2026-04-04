@@ -2,14 +2,31 @@ from flask import Flask, request, send_file, render_template, Response
 from PIL import Image
 from rembg import remove
 import io
+import math
+import traceback
 from datetime import datetime
 import vtracer
 
 app = Flask(__name__)
 
+MAX_SVG_SIZE = 512  # Render無料枠(512MB RAM)に合わせて縮小
+
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/healthz')
+def healthz():
+    """診断用: vtracer動作確認"""
+    try:
+        # 1x1の白画像でvtracerをテスト
+        img = Image.new('RGB', (4, 4), color=(255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        svg = vtracer.convert_raw_image_to_svg(buf.getvalue(), img_format='png', colormode='color')
+        return f'OK vtracer={vtracer.__version__ if hasattr(vtracer, "__version__") else "installed"} svg_len={len(svg)}'
+    except Exception as e:
+        return f'ERROR: {traceback.format_exc()}', 500
 
 @app.route('/convert/webp', methods=['POST'])
 def convert_webp():
@@ -42,40 +59,43 @@ def remove_bg():
     return send_file(output, mimetype='image/png',
                      as_attachment=True, download_name=f'{base_name}_nobg_{timestamp}.png')
 
-MAX_SVG_SIZE = 1024  # 長辺の最大ピクセル数
-
 @app.route('/convert/svg', methods=['POST'])
 def convert_svg():
     file = request.files.get('file')
     if not file:
         return '画像ファイルが選択されていません', 400
 
-    mode = request.form.get('mode', 'color')
-    colors = int(request.form.get('colors', 8))
+    try:
+        mode = request.form.get('mode', 'color')
+        colors = int(request.form.get('colors', 8))
 
-    # 画像をリサイズしてメモリ使用量を抑える
-    img = Image.open(file.stream).convert('RGB')
-    w, h = img.size
-    if max(w, h) > MAX_SVG_SIZE:
-        scale = MAX_SVG_SIZE / max(w, h)
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        img = Image.open(file.stream).convert('RGB')
+        w, h = img.size
 
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    img_bytes = buf.getvalue()
+        # メモリ節約のため長辺512px以下にリサイズ
+        if max(w, h) > MAX_SVG_SIZE:
+            scale = MAX_SVG_SIZE / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-    colormode = 'binary' if mode == 'bw' else 'color'
-    import math
-    color_precision = 1 if mode == 'bw' else max(1, min(8, round(math.log2(max(2, colors)))))
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        img_bytes = buf.getvalue()
+        buf.close()
 
-    svg_str = vtracer.convert_raw_image_to_svg(
-        img_bytes,
-        img_format='png',
-        colormode=colormode,
-        color_precision=color_precision
-    )
+        colormode = 'binary' if mode == 'bw' else 'color'
+        color_precision = 1 if mode == 'bw' else max(1, min(8, round(math.log2(max(2, colors)))))
 
-    return Response(svg_str, mimetype='image/svg+xml')
+        svg_str = vtracer.convert_raw_image_to_svg(
+            img_bytes,
+            img_format='png',
+            colormode=colormode,
+            color_precision=color_precision
+        )
+
+        return Response(svg_str, mimetype='image/svg+xml')
+
+    except Exception as e:
+        return f'変換エラー: {traceback.format_exc()}', 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
